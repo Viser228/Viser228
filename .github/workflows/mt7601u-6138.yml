@@ -1,0 +1,89 @@
+name: MT7601U 6.1.138 ABI rebuild
+
+on:
+  push:
+    paths:
+      - '.github/workflows/mt7601u-6138.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    steps:
+      - name: Prepare compiler and disk
+        shell: bash
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/powershell || true
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bc bison flex libssl-dev libelf-dev dwarves cpio rsync clang lld llvm gcc-aarch64-linux-gnu
+
+      - name: Fetch Android GKI 6.1.138 reference source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth=1 --branch android14-6.1-2025-06_r1 https://github.com/aosp-mirror/kernel_common.git kernel
+          sed -n '1,6p' kernel/Makefile
+          grep -q '^SUBLEVEL = 138$' kernel/Makefile
+          git -C kernel rev-parse HEAD
+
+      - name: Configure mac80211 and MT7601U
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cd kernel
+          make O="${GITHUB_WORKSPACE}/out" ARCH=arm64 LLVM=1 gki_defconfig
+          ./scripts/config --file "${GITHUB_WORKSPACE}/out/.config" \
+            -e USB -e WLAN -e WLAN_VENDOR_MEDIATEK \
+            -m CFG80211 -m MAC80211 -m MT7601U \
+            -e MAC80211_MESH -e MAC80211_LEDS
+          make O="${GITHUB_WORKSPACE}/out" ARCH=arm64 LLVM=1 olddefconfig
+          grep -E '^(CONFIG_(MT7601U|MAC80211|MAC80211_LEDS|MAC80211_MESH|CFG80211|MODVERSIONS|CFI_CLANG)=)' "${GITHUB_WORKSPACE}/out/.config"
+          grep -q '^CONFIG_MT7601U=m$' "${GITHUB_WORKSPACE}/out/.config"
+
+      - name: Compile and keep ABI outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd kernel
+          make O="${GITHUB_WORKSPACE}/out" ARCH=arm64 LLVM=1 -j3 Image modules 2>&1 | tee "${GITHUB_WORKSPACE}/compile.log"
+          test -s "${GITHUB_WORKSPACE}/out/drivers/net/wireless/mediatek/mt7601u/mt7601u.ko"
+          test -s "${GITHUB_WORKSPACE}/out/net/mac80211/mac80211.ko"
+          test -s "${GITHUB_WORKSPACE}/out/net/wireless/cfg80211.ko"
+
+      - name: Generate reproducible diagnostic package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          cp out/drivers/net/wireless/mediatek/mt7601u/mt7601u.ko results/
+          cp out/net/mac80211/mac80211.ko results/mac80211-BUILT-NOT-FOR-INSTALL.ko
+          cp out/net/wireless/cfg80211.ko results/cfg80211-BUILT-NOT-FOR-INSTALL.ko
+          cp out/.config results/build-config
+          cp out/Module.symvers results/Module.symvers
+          {
+            echo "SRC android14-6.1-2025-06_r1, Linux 6.1.138"
+            git -C kernel rev-parse HEAD
+            echo "REFERENCE POCO GKID installed 6.1.177-GKID-r652-8aaf08bba"
+            echo "DO NOT LOAD or FLASH any .ko yet: GKI kernel ABI/CRC and KCFI still need explicit validation"
+            sha256sum results/*.ko
+            for file in results/*.ko; do
+              echo "--- ${file} ---"
+              llvm-readelf -p .modinfo "${file}" | head -25 || true
+            done
+          } > results/BUILD_REPORT.txt
+
+      - name: Publish artifact for offline CRC comparisons
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mt7601u-6138-abi-research
+          path: |
+            results/
+            compile.log
+          if-no-files-found: warn
+          retention-days: 7
