@@ -1,0 +1,49 @@
+name: ABI-gated KernelSU manual test package
+
+on:
+  workflow_run:
+    workflows: ['MT7601U native duchamp 6.1.134 ABI candidate']
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - name: Checkout static package builder
+        uses: actions/checkout@v4
+      - name: Obtain the correct prior compiled module
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ORIGIN_RUN: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          id="${ORIGIN_RUN:-39538061723}"
+          echo "Loading artifact from build $id"
+          gh run download "$id" --repo "$GITHUB_REPOSITORY" -n mt7601u-duchamp-native-NOT-FOR-INSTALL -D staged
+          test -s staged/results/mt7601u.ko
+          test -s staged/results/ABI_CHECK.json
+      - name: Fetch original MT7601U firmware with Ralink redistribution license
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p firmware
+          curl -fsSL --retry 3 https://raw.githubusercontent.com/pop-os/linux-firmware/master/mediatek/mt7601u.bin -o firmware/mt7601u.bin
+          curl -fsSL --retry 3 https://raw.githubusercontent.com/wkennington/linux-firmware/master/LICENCE.ralink_a_mediatek_company_firmware -o firmware/LICENCE.ralink_a_mediatek_company_firmware
+      - name: Package ONLY if CRC checks pass; never auto-load
+        run: python3 tools/package_mt7601u_manual.py staged package
+      - name: Upload any report and conditional manually-invoked KernelSU ZIP
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mt7601u-duchamp-manual-package-if-compatible
+          path: package/
+          retention-days: 5
+          if-no-files-found: warn
