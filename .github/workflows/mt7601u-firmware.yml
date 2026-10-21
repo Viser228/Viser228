@@ -16,7 +16,7 @@ jobs:
           set -euo pipefail
           mkdir -p firmware
           curl -fsSL --retry 3 https://raw.githubusercontent.com/pop-os/linux-firmware/master/mediatek/mt7601u.bin -o firmware/mt7601u.bin
-          curl -fsSL --retry 3 https://raw.githubusercontent.com/pop-os/linux-firmware/master/LICENCE.ralink_a_mediatek_company_firmware -o firmware/LICENCE.ralink_a_mediatek_company_firmware
+          curl -fsSL --retry 3 https://raw.githubusercontent.com/wkennington/linux-firmware/master/LICENCE.ralink_a_mediatek_company_firmware -o firmware/LICENCE.ralink_a_mediatek_company_firmware
           test "$(wc -c < firmware/mt7601u.bin)" -eq 45412
           sha256sum firmware/mt7601u.bin > firmware/SHA256SUMS
           printf 'Source: https://github.com/pop-os/linux-firmware/blob/master/mediatek/mt7601u.bin\nThe mt6897-devs mt7601u driver requests mt7601u.bin at root firmware search path.\n' > firmware/README.txt
