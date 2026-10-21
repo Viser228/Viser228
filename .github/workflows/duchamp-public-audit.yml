@@ -1,0 +1,26 @@
+name: Download public duchamp Wi-Fi modules for offline ABI audit
+on:
+  push:
+    paths: ['.github/workflows/duchamp-public-audit.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Get public modules with sha256 proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p public
+          for m in mac80211 cfg80211; do
+            curl -fsSL --retry 3 "https://raw.githubusercontent.com/mt6897-devs/device_xiaomi_duchamp-kernel/lineage-23.2/modules/${m}.ko" -o "public/${m}.ko"
+          done
+          sha256sum public/*.ko > public/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: duchamp-public-wifi-for-offline-analysis
+          path: public/
+          retention-days: 2
