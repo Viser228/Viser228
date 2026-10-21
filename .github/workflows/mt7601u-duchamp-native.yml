@@ -1,0 +1,101 @@
+name: MT7601U native duchamp 6.1.134 ABI candidate
+
+on:
+  push:
+    paths:
+      - '.github/workflows/mt7601u-duchamp-native.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile-and-compare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 95
+    steps:
+      - name: Checkout read-only ABI checker
+        uses: actions/checkout@v4
+      - name: Set up disk and compilers
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/powershell || true
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bc bison flex libssl-dev libelf-dev dwarves cpio rsync clang lld llvm gcc-aarch64-linux-gnu kmod file
+          df -h .
+      - name: Fetch specific POCO X6 Pro (duchamp) kernel sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone -q --depth=1 --branch lineage-23.2 https://github.com/mt6897-devs/android_kernel_6.1.git kernel
+          cd kernel
+          git log -1 --format='%h %ad %s' --date=iso
+          echo "Kernel version:"
+          make -s kernelversion
+      - name: Download public duchamp reference Wi-Fi drivers
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p prebuilt results
+          for m in mac80211 cfg80211; do
+            curl --fail --retry 3 -L -sS \
+              "https://raw.githubusercontent.com/mt6897-devs/device_xiaomi_duchamp-kernel/lineage-23.2/modules/${m}.ko" \
+              -o "prebuilt/${m}.ko"
+            modinfo -F vermagic "prebuilt/${m}.ko"
+          done
+      - name: Configure Wi-Fi interfaces like stock POCO
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cd kernel
+          make O="${GITHUB_WORKSPACE}/out" ARCH=arm64 LLVM=1 gki_defconfig
+          ./scripts/config --file "${GITHUB_WORKSPACE}/out/.config" \
+            -e USB -e WLAN -e WLAN_VENDOR_MEDIATEK \
+            -e MAC80211_LEDS -e MAC80211_MESH \
+            -m CFG80211 -m MAC80211 -m MT7601U
+          make O="${GITHUB_WORKSPACE}/out" ARCH=arm64 LLVM=1 olddefconfig
+          grep -E '^(CONFIG_(MT7601U|MAC80211|CFG80211|MAC80211_MESH|MAC80211_LEDS|MODVERSIONS|CFI_CLANG)=)' "${GITHUB_WORKSPACE}/out/.config"
+          grep -q '^CONFIG_MT7601U=m$' "${GITHUB_WORKSPACE}/out/.config"
+          grep -q '^CONFIG_MAC80211_MESH=y$' "${GITHUB_WORKSPACE}/out/.config"
+          grep -q '^CONFIG_MAC80211_LEDS=y$' "${GITHUB_WORKSPACE}/out/.config"
+      - name: Build kernel and modules for accurate version checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd kernel
+          make O="${GITHUB_WORKSPACE}/out" ARCH=arm64 LLVM=1 -j3 Image modules 2>&1 | tee "${GITHUB_WORKSPACE}/build-duchamp.log"
+          test -s "${GITHUB_WORKSPACE}/out/drivers/net/wireless/mediatek/mt7601u/mt7601u.ko"
+      - name: Check all CRCs against published duchamp Wi-Fi driver exports
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp out/drivers/net/wireless/mediatek/mt7601u/mt7601u.ko results/
+          cp out/.config results/build-config
+          modinfo results/mt7601u.ko > results/modinfo.txt
+          sha256sum results/mt7601u.ko > results/sha256.txt
+          python3 tools/check_duchamp_full_abi.py | tee results/ABI_CHECK.txt
+          cat > results/README.txt <<'END'
+          EXPERIMENT ONLY, NOT SAFE TO INSTALL YET.
+          Device: POCO X6 Pro / Redmi K70E (duchamp).
+          Source: mt6897-devs/android_kernel_6.1 branch lineage-23.2.
+          Firmware needed: mt7601u.bin.
+          References: same project's public cfg80211/mac80211 modules;
+          their 18 required WiFi export CRCs were independently checked
+          against the actual POCO stock module CRCs (18 of 18 match).
+          Test also compares the module's generic kernel CRCs where possible.
+          Even all CRC matches do not establish matching vermagic, CFI types,
+          driver operation, boot safety or USB/firmware compatibility.
+          Never auto-flash or auto-insmod output.
+          END
+      - name: Upload experimental .ko and compatibility report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mt7601u-duchamp-native-NOT-FOR-INSTALL
+          path: |
+            results/
+            build-duchamp.log
+          if-no-files-found: warn
+          retention-days: 5
