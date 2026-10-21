@@ -1,0 +1,40 @@
+name: Compare published duchamp Wi-Fi prebuilts with stock CRCs
+
+on:
+  push:
+    paths:
+      - '.github/workflows/duchamp-wifi-prebuilt-match.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install modinfo
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq kmod
+      - name: Fetch public duchamp modules
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p prebuilt results
+          for m in mac80211 cfg80211; do
+            curl --fail --location --retry 3 --silent --show-error \
+              "https://raw.githubusercontent.com/mt6897-devs/device_xiaomi_duchamp-kernel/lineage-23.2/modules/${m}.ko" \
+              -o "prebuilt/${m}.ko"
+            file "prebuilt/${m}.ko"
+            sha256sum "prebuilt/${m}.ko"
+          done
+      - name: Check exact exported CRC matches
+        run: python3 tools/compare_duchamp_prebuilt.py | tee results/result.txt
+      - name: Upload comparison results (no phone files)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-duchamp-wifi-crc-check
+          path: results/
+          retention-days: 7
