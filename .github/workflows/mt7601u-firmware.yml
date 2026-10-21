@@ -1,0 +1,27 @@
+name: Fetch upstream MT7601U firmware for candidate package
+on:
+  push:
+    paths: ['.github/workflows/mt7601u-firmware.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  firmware:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Fetch license and firmware from Linux firmware mirror
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p firmware
+          curl -fsSL --retry 3 https://raw.githubusercontent.com/pop-os/linux-firmware/master/mediatek/mt7601u.bin -o firmware/mt7601u.bin
+          curl -fsSL --retry 3 https://raw.githubusercontent.com/pop-os/linux-firmware/master/LICENCE.mediatek -o firmware/LICENCE.mediatek
+          test "$(wc -c < firmware/mt7601u.bin)" -eq 45412
+          sha256sum firmware/mt7601u.bin > firmware/SHA256SUMS
+          printf 'Source: https://github.com/pop-os/linux-firmware/blob/master/mediatek/mt7601u.bin\nThe mt6897-devs mt7601u driver requests mt7601u.bin at root firmware search path.\n' > firmware/README.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mt7601u-firmware-and-license
+          path: firmware/
+          retention-days: 2
